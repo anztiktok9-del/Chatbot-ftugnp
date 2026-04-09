@@ -1,0 +1,5 @@
+streamlit
+pyTelegramBotAPI
+requests
+thefuzz[speedup]
+duckduckgo-search
