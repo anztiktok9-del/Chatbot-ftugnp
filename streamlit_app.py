@@ -14,7 +14,6 @@ st.set_page_config(page_title="Chatbot FT UGN", page_icon="🎓", layout="center
 st.markdown("""
     <style>
     .stChatMessage { margin-bottom: 15px; border-radius: 15px; }
-    /* Memastikan balon chat user terlihat rapi di kanan */
     </style>
 """, unsafe_allow_html=True)
 
@@ -46,20 +45,25 @@ def save_k(data):
     with open(DATA_FILE, 'w', encoding='utf-8') as f:
         json.dump(data, f, indent=4, ensure_ascii=False)
 
-# --- 4. LOGIKA PINTAR & SOPAN SANTUN ---
+# --- 4. LOGIKA PINTAR & MONITORING ADMIN ---
 def get_ai_response(user_msg):
     knowledge = load_k()
     base_reply = ""
+    
+    # --- FITUR MONITORING: LAPOR KE ADMIN SETIAP PERTANYAAN ---
+    try:
+        bot.send_message(ADMIN_ID, f"💬 **MAHASISWA BERTANYA:**\n`{user_msg}`")
+    except: pass
+
     # Deteksi jika mahasiswa bertanya daftar/list
     is_list = any(w in user_msg.lower() for w in ["siapa aja", "siapa saja", "daftar", "dosen-dosen", "apa saja", "list"])
 
-    # A. Cek Knowledge Base Lokal
+    # A. Cek Knowledge Base Lokal (RAG)
     if knowledge:
         match = process.extractOne(user_msg.lower(), knowledge.keys(), scorer=fuzz.token_sort_ratio)
         if match and match[1] >= 85 and not is_list:
             base_reply = knowledge[match[0]]
         elif match and match[1] >= 70 and is_list:
-            # Jika tanya daftar dan jawaban di DB panjang (>40 karakter), kita anggap lengkap
             if len(knowledge[match[0]]) > 40:
                 base_reply = knowledge[match[0]]
             else: 
@@ -85,7 +89,7 @@ def get_ai_response(user_msg):
         try:
             res = requests.post(
                 url="https://openrouter.ai/api/v1/chat/completions",
-                headers={"Authorization": f"Bearer {OPENROUTER_KEY}"},
+                headers={"Authorization": f"Bearer {OPENROUTER_KEY}", "Content-Type": "application/json"},
                 json={"model": MODEL, "messages": [{"role": "system", "content": prompt}, {"role": "user", "content": user_msg}]},
                 timeout=15
             )
@@ -93,23 +97,19 @@ def get_ai_response(user_msg):
         except: 
             return "Maaf Kak, server sedang sibuk. Silakan coba sebentar lagi ya! 😊"
 
-    # C. Lapor Admin Jika Bot Bingung / Butuh Knowledge Baru
+    # C. Lapor Khusus Jika Bot Bingung (Butuh Update Knowledge)
     if "[TIDAK_TAHU]" in base_reply or base_reply == "[BUTUH_ADMIN]":
         try:
-            msg_ke_admin = f"⚠️ **BOT BUTUH BANTUAN!**\n\nUser Nanya: `{user_msg}`\n\nOpal, silakan tambahkan pengetahuan baru dengan balas format:\n`/tambah {user_msg} | Jawabannya`"
-            bot.send_message(ADMIN_ID, msg_ke_admin, parse_mode="Markdown")
+            bot.send_message(ADMIN_ID, f"⚠️ **BOT BINGUNG!**\nUser: `{user_msg}`\nBalas: `/tambah {user_msg} | Jawabannya`")
         except: pass
-        return "Halo Kak! Saat ini asisten belum memiliki data lengkap mengenai hal itu. Pertanyaan Kakak sudah diteruskan ke Admin Fakultas Teknik untuk segera diperbarui. Silakan tanya hal lain ya! 😊"
+        return "Halo Kak! Saat ini asisten belum memiliki data lengkap mengenai hal itu. Pertanyaan Kakak sudah diteruskan ke Admin Fakultas Teknik untuk segera diperbarui. 😊"
 
-    # D. Wrapper Kesopanan (Membuat jawaban singkat jadi ramah)
-    prompt_sopan = (
-        f"Ubah kalimat berikut menjadi jawaban asisten kampus yang sangat sopan, ramah, dan profesional. "
-        f"Gunakan panggil 'Kak' atau 'Rekan Mahasiswa'. Jawaban: {base_reply}"
-    )
+    # D. Poles Kesopanan (Rewriting)
+    prompt_sopan = f"Ubah kalimat ini jadi jawaban asisten kampus yang sangat sopan dan ramah (panggil Kak): {base_reply}"
     try:
         res_sopan = requests.post(
             url="https://openrouter.ai/api/v1/chat/completions",
-            headers={"Authorization": f"Bearer {OPENROUTER_KEY}"},
+            headers={"Authorization": f"Bearer {OPENROUTER_KEY}", "Content-Type": "application/json"},
             json={"model": MODEL, "messages": [{"role": "user", "content": prompt_sopan}]},
             timeout=10
         )
@@ -129,21 +129,19 @@ def admin_tambah(m):
             d = load_k()
             d[q.strip().lower()] = a.strip()
             save_k(d)
-            bot.reply_to(m, f"✅ **Pengetahuan Tersimpan!**\n\nSekarang bot sudah tahu jawaban untuk: *{q.strip()}*")
+            bot.reply_to(m, f"✅ **Pengetahuan Tersimpan!**\nSekarang bot sudah tahu jawaban untuk: *{q.strip()}*")
         except: 
-            bot.reply_to(m, "❌ Format salah! Gunakan: `/tambah Tanya | Jawab`")
+            bot.reply_to(m, "❌ Format: `/tambah Tanya | Jawab`")
 
 def start_bot():
     try:
-        # Menghapus koneksi lama agar server Streamlit yang memegang kendali
         bot.remove_webhook()
         time.sleep(1)
-        # Ping ke Opal untuk bukti bot nyala
-        bot.send_message(ADMIN_ID, "🚀 **Bot Sistem FT-UGN Siap!** Jalur komunikasi website sudah aktif.")
+        # Ping ke Opal sebagai tanda jalur aman
+        bot.send_message(ADMIN_ID, "🚀 **Bot Sistem FT-UGN Siap!** Monitoring website sudah aktif.")
         bot.infinity_polling(timeout=20)
     except: pass
 
-# Jalankan bot di background thread
 if "bot_active" not in st.session_state:
     Thread(target=start_bot, daemon=True).start()
     st.session_state.bot_active = True
@@ -152,21 +150,19 @@ if "bot_active" not in st.session_state:
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-# Tampilkan riwayat chat di website
+# Tampilkan history
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
 
-# Input pertanyaan dari Mahasiswa
-if prompt := st.chat_input("Tulis pertanyaanmu seputar kampus di sini..."):
-    # Tampilkan chat user
+# Input Mahasiswa
+if prompt := st.chat_input("Tulis pertanyaanmu di sini..."):
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
         st.markdown(prompt)
 
-    # Proses jawaban bot
     with st.chat_message("assistant"):
-        with st.spinner("Sedang memproses informasi..."):
+        with st.spinner("Sedang memproses..."):
             ans = get_ai_response(prompt)
             st.markdown(ans)
     st.session_state.messages.append({"role": "assistant", "content": ans})
